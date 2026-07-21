@@ -6,7 +6,7 @@ import shutil
 
 st.set_page_config(page_title="New Study", layout="wide")
 
-st.title("🆕 New Study 2")
+st.title("🆕 old study")
 st.markdown("---")
 
 project_name = st.text_input("Project Name")
