@@ -17,7 +17,15 @@ wave_type = st.radio(
     ["Single Wave","Multiple Wave"],
     horizontal=True
 )
+sample=st.number_input(
 
+    "Sample Size",
+
+    min_value=1,
+
+    value=100
+
+)
 survey_file = st.file_uploader(
     "Upload Survey File",
     type=["csv","xlsx"]
