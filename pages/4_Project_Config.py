@@ -1,69 +1,89 @@
-import streamlit as st
-import pandas as pd
+﻿import streamlit as st
 import os
 
-st.set_page_config(layout="wide")
+from backend.database import get_question_mapping, save_question_mapping, get_project
+from backend.file_handler import load_project_survey
+
+st.set_page_config(page_title="Project Configuration", layout="wide")
 
 st.title("Project Configuration")
 
 project = st.session_state.get("current_project")
-
 if project is None:
-    st.error("No active project.")
+    st.error("No active project. Please create or open a project first.")
     st.stop()
 
-folder = os.path.join("uploads", project)
-files = os.listdir(folder)
+project_meta = get_project(project)
 
-survey = None
+if project_meta:
+    st.markdown(
+        f"**Project:** {project_meta['project_name']}  \n"
+        f"**Wave type:** {project_meta['wave_type']}  \n"
+        f"**Created:** {project_meta['created_date']}"
+    )
 
-# FIX 1: Skip the quota file so it doesn't overwrite your survey dataset
-for f in files:
-    if "quota" in f.lower():
-        continue  # Ignore quota templates here
-        
-    if f.endswith(".csv"):
-        survey = pd.read_csv(os.path.join(folder, f))
-        break
-    elif f.endswith(".xlsx"):
-        survey = pd.read_excel(os.path.join(folder, f))
-        break
+project_folder = os.path.join("uploads", project)
+if not os.path.isdir(project_folder):
+    st.error(f"Project folder uploads/{project} was not found.")
+    st.stop()
 
-# Safety check in case no survey file was parsed
-if survey is None:
-    st.error("Could not locate or load the survey data file in the project folder.")
+try:
+    survey = load_project_survey(project_folder)
+except Exception as exc:
+    st.error(f"Could not load survey data: {exc}")
     st.stop()
 
 questions = survey.columns.tolist()
+existing_mapping = get_question_mapping(project) or {}
 
-st.subheader("Map Important Questions")
+st.subheader("Map important survey columns for QA")
 
 respondent = st.selectbox(
-    "Respondent ID",
-    questions
+    "Respondent ID column",
+    questions,
+    index=questions.index(existing_mapping.get("respondent_id")) if existing_mapping.get("respondent_id") in questions else 0,
 )
 
 duration = st.selectbox(
-    "Duration Variable",
-    questions
+    "Duration / LOI column",
+    ["None"] + questions,
+    index=( ["None"] + questions).index(existing_mapping.get("duration")) if existing_mapping.get("duration") in questions else 0,
 )
 
 awareness = st.selectbox(
-    "Awareness Question",
-    questions
+    "Awareness question column",
+    questions,
+    index=questions.index(existing_mapping.get("awareness")) if existing_mapping.get("awareness") in questions else 0,
 )
 
 consideration = st.selectbox(
-    "Consideration Question",
-    questions
+    "Consideration question column",
+    questions,
+    index=questions.index(existing_mapping.get("consideration")) if existing_mapping.get("consideration") in questions else 0,
 )
 
 purchase = st.selectbox(
-    "Purchase Intent",
-    questions
+    "Purchase intent question column",
+    questions,
+    index=questions.index(existing_mapping.get("purchase")) if existing_mapping.get("purchase") in questions else 0,
+)
+
+usage = st.selectbox(
+    "Usage or category question column",
+    questions,
+    index=questions.index(existing_mapping.get("usage")) if existing_mapping.get("usage") in questions else 0,
 )
 
 if st.button("Save Configuration"):
-    st.success("Configuration Saved")
-    # FIX 2: Updated to match 5_QA_Checks.py in your sidebar directory
+    save_question_mapping(
+        project,
+        respondent,
+        duration if duration != "None" else "",
+        awareness,
+        consideration,
+        purchase,
+        usage,
+    )
+    st.success("Configuration saved successfully.")
+    st.info("Proceed to the automated QA sweep for this project.")
     st.switch_page("pages/5_QA_Checks.py")
