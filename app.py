@@ -33,7 +33,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.title("QA Automation Engine")
+st.title("QA Automation Engine 2")
 st.write("")
 st.markdown("---")
 
