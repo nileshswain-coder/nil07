@@ -2,7 +2,7 @@ import streamlit as st
 from backend.database import initialize_database
 
 st.set_page_config(
-    page_title="QA Automation Engine 2",
+    page_title="QA Automation Engine",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="collapsed"
@@ -33,7 +33,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.title("QA Automation Engine 2")
+st.title("QA Automation Engine")
 st.write("")
 st.markdown("---")
 
