@@ -1,136 +1,154 @@
-import streamlit as st
+﻿import streamlit as st
 import pandas as pd
 import os
 
-st.set_page_config(layout="wide")
+from backend.database import get_question_mapping, get_project
+from backend.file_handler import load_project_survey, load_project_quota
+from backend.qa_engine import (
+    build_project_overview,
+    run_duplicate_id_check,
+    run_missing_values_check,
+    run_quota_compliance,
+    run_speed_check,
+)
 
-st.title("🛡️ QA Automated Quality Checks")
+st.set_page_config(page_title="QA Checks", layout="wide")
 
-# 1. Check for active session project
+st.title("🛡️ QA Automation Suite")
+
 project = st.session_state.get("current_project")
-
 if project is None:
     st.error("No active project found. Please create or open a project first.")
     st.stop()
 
-# 2. Locate and load the active project survey data
-folder = os.path.join("uploads", project)
-if not os.path.exists(folder):
-    st.error(f"Project directory 'uploads/{project}' does not exist.")
+project_folder = os.path.join("uploads", project)
+if not os.path.isdir(project_folder):
+    st.error(f"Project directory uploads/{project} does not exist.")
     st.stop()
 
-files = os.listdir(folder)
-survey = None
-
-for f in files:
-    if "quota" in f.lower():
-        continue  # Skip quota template file
-    if f.endswith(".csv"):
-        survey = pd.read_csv(os.path.join(folder, f))
-        break
-    elif f.endswith(".xlsx"):
-        survey = pd.read_excel(os.path.join(folder, f))
-        break
-
-if survey is None:
-    st.error("Could not find a valid survey data file (.csv or .xlsx) in the project uploads folder.")
+try:
+    survey = load_project_survey(project_folder)
+except Exception as exc:
+    st.error(f"Could not load survey data: {exc}")
     st.stop()
+
+quota_df = load_project_quota(project_folder)
+project_config = get_question_mapping(project) or {}
+
+if st.session_state.get("qa_project") != project:
+    st.session_state["qa_run"] = False
+    st.session_state["qa_project"] = project
+
+st.markdown(f"### QA sweep for **{project}**")
+st.info(f"Loaded dataset with {len(survey):,} rows and {len(survey.columns)} columns.")
+
+id_col = st.selectbox(
+    "Respondent ID column for duplicate validation:",
+    survey.columns.tolist(),
+    index=survey.columns.tolist().index(project_config.get("respondent_id")) if project_config.get("respondent_id") in survey.columns else 0,
+)
+
+numeric_columns = survey.select_dtypes(include=["number"]).columns.tolist()
+duration_col = st.selectbox(
+    "Duration / LOI column (optional):",
+    ["None"] + numeric_columns,
+    index=( ["None"] + numeric_columns).index(project_config.get("duration")) if project_config.get("duration") in numeric_columns else 0,
+)
 
 st.markdown("---")
-st.subheader(f"Data Engine Audit Summary for: **{project}**")
-st.info(f"Loaded dataset successfully containing **{survey.shape[0]}** rows and **{survey.shape[1]}** columns.")
 
-# 3. Setup QA Parameters Interface
-st.markdown("### ⚙️ Configure QA Sweep Criteria")
-col1, col2 = st.columns(2)
+if "qa_run" not in st.session_state:
+    st.session_state["qa_run"] = False
 
-with col1:
-    id_col = st.selectbox(
-        "Identify Respondent ID column (for duplicate key checks):", 
-        survey.columns.tolist()
-    )
+if st.button("🚀 Run QA Automation Suite"):
+    st.session_state["qa_run"] = True
 
-with col2:
-    # Filter only numeric columns to find duration metrics
-    numeric_cols = survey.select_dtypes(include=['number']).columns.tolist()
-    duration_col = st.selectbox(
-        "Identify Duration/LOI column (Optional - for speeder flags):", 
-        ["None"] + numeric_cols
-    )
+if st.session_state["qa_run"]:
+    st.markdown("### 📊 QA Report Summary")
 
-# Track execution state cleanly in Streamlit to avoid screen reset bugs
-if "qa_executed" not in st.session_state:
-    st.session_state["qa_executed"] = False
+    overview = build_project_overview(survey)
+    duplicates = run_duplicate_id_check(survey, id_col)
+    missing_counts = run_missing_values_check(survey)
+    missing_total = int(missing_counts.sum())
 
-if st.button("🚀 Run QA Automation Suite", type="primary"):
-    st.session_state["qa_executed"] = True
-
-# 4. Display Results Dashboard once the user clicks "Run"
-if st.session_state["qa_executed"]:
-    st.markdown("---")
-    st.markdown("### 📊 Automated Quality Report Summary")
-    
-    # Execution Logic 1: Find Duplicates
-    duplicates = survey[survey.duplicated(subset=[id_col], keep=False)]
-    num_dupes = duplicates.shape[0]
-    
-    # Execution Logic 2: Missing Matrix
-    missing_counts = survey.isnull().sum()
-    total_missing = missing_counts.sum()
-    
-    # Visual Metric Badges
-    m1, m2, m3 = st.columns(3)
-    m1.metric("Total Records Evaluated", len(survey))
-    
-    m2.metric(
-        label="Duplicate Rows Found", 
-        value=num_dupes, 
-        delta=f"-{num_dupes} flags" if num_dupes > 0 else "0 flags", 
-        delta_color="inverse" if num_dupes > 0 else "normal"
-    )
-    
-    m3.metric(
-        label="Total Empty Data Cells", 
-        value=total_missing, 
-        delta=f"-{total_missing} cells" if total_missing > 0 else "0 cells", 
-        delta_color="inverse" if total_missing > 0 else "normal"
-    )
-    
-    # Collapsible Detailed Inspections
-    with st.expander("🔍 Duplicate ID Registry Detail", expanded=True):
-        if num_dupes > 0:
-            st.warning(f"Attention required: Found {num_dupes} matching record entries on the unique key.")
-            st.dataframe(duplicates)
-        else:
-            st.success("Clean Pass: All Respondent IDs represent distinctly unique entries.")
-            
-    with st.expander("📉 Missing Field Matrix Breakdown", expanded=False):
-        if total_missing > 0:
-            missing_df = missing_counts[missing_counts > 0].reset_index()
-            missing_df.columns = ['Column Name/Variable', 'Missing Cell Count']
-            st.dataframe(missing_df)
-        else:
-            st.success("Clean Pass: Complete matrix stability. No null values found across variables.")
-
-    # Execution Logic 3: Speeder Thresholding (Evaluated at < 40% of survey sample median speed)
+    speed_data = None
     if duration_col != "None":
-        with st.expander("⏱️ Interview Completion Speed/LOI Anomalies", expanded=True):
-            median_time = survey[duration_col].median()
-            speeder_threshold = median_time * 0.4
-            speeders = survey[survey[duration_col] < speeder_threshold]
-            
-            st.write(f"Dataset Median Interview Duration: **{median_time:.2f}** units.")
-            st.write(f"Automated Speeder Guardrail limit (40% of median): **{speeder_threshold:.2f}** units.")
-            
-            if len(speeders) > 0:
-                st.error(f"Flagged Alert: **{len(speeders)}** respondents completed the instrument too rapidly.")
-                st.dataframe(speeders)
+        speed_data = run_speed_check(survey, duration_col)
+
+    quota_results = run_quota_compliance(survey, quota_df)
+
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Interviews Reviewed", f"{overview['total_rows']:,}")
+    m2.metric("Duplicate rows found", f"{len(duplicates):,}")
+    m3.metric("Missing values", f"{missing_total:,}")
+
+    if speed_data is not None:
+        m4, m5 = st.columns(2)
+        m4.metric("Median duration", f"{speed_data['median_duration']:.1f}")
+        m5.metric("Speeder count", f"{len(speed_data['speeders']):,}")
+
+    with st.expander("Duplicate records detail", expanded=True):
+        if len(duplicates) > 0:
+            st.warning(f"{len(duplicates)} records share the same Respondent ID.")
+            st.dataframe(duplicates)
+            duplicates_csv = duplicates.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                "Download duplicate record list",
+                data=duplicates_csv,
+                file_name=f"{project}_duplicates.csv",
+                mime="text/csv",
+            )
+        else:
+            st.success("No duplicate Respondent ID entries detected.")
+
+    with st.expander("Missing values matrix", expanded=False):
+        if missing_total > 0:
+            missing_df = missing_counts[missing_counts > 0].reset_index()
+            missing_df.columns = ["Column", "Missing count"]
+            st.dataframe(missing_df)
+            missing_csv = missing_df.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                "Download missing values summary",
+                data=missing_csv,
+                file_name=f"{project}_missing_values.csv",
+                mime="text/csv",
+            )
+        else:
+            st.success("No missing values found in the selected dataset.")
+
+    if speed_data is not None:
+        with st.expander("Speeder / Duration threshold analysis", expanded=True):
+            st.write(f"Median duration: **{speed_data['median_duration']:.2f}**")
+            st.write(f"Speeder threshold (40% of median): **{speed_data['threshold']:.2f}**")
+            if len(speed_data["speeders"]) > 0:
+                st.error(f"{len(speed_data['speeders']):,} interviews completed faster than expected.")
+                st.dataframe(speed_data["speeders"])
+                speed_csv = speed_data["speeders"].to_csv(index=False).encode("utf-8")
+                st.download_button(
+                    "Download speeders list",
+                    data=speed_csv,
+                    file_name=f"{project}_speeders.csv",
+                    mime="text/csv",
+                )
             else:
-                st.success("Clean Pass: No interview response speeds broke lower control speed boundaries.")
+                st.success("No speeders were detected in the selected duration field.")
+
+    with st.expander("Quota compliance review", expanded=True):
+        if quota_df is None:
+            st.info("No quota file found in the current project folder.")
+        else:
+            st.write(quota_results.get("message"))
+            quota_table = quota_results.get("compliance_table")
+            if quota_table is not None:
+                st.dataframe(quota_table)
+                quota_csv = quota_table.to_csv(index=False).encode("utf-8")
+                st.download_button(
+                    "Download quota compliance summary",
+                    data=quota_csv,
+                    file_name=f"{project}_quota_compliance.csv",
+                    mime="text/csv",
+                )
 
     st.markdown("---")
-    
-    # 5. Route to Final Dashboard Screen
-    if st.button("Proceed to Output Dashboard ➡️"):
-        # Explicitly targets your '6_Dasboard.py' file (matching the unique spelling in your sidebar structure)
+    if st.button("Proceed to Data Dashboard ➡️"):
         st.switch_page("pages/6_Dasboard.py")
